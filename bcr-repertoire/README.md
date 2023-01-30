@@ -4,7 +4,7 @@ This folder contains code for the high-throughput BCR repertoire analysis.
 
 ## Data
 
-Data generated in this work (repertoire of intratumoural B cells) and those from healthy volunteers, Ebola convalescent patients and hospitalised COVID-19 patients can be found in <https://doi.org/10.5281/zenodo.7584228>.
+Data generated in this work (repertoire of intratumoural B cells) and those from healthy volunteers, Ebola convalescent patients and hospitalised COVID-19 patients can be found in <https://doi.org/10.5281/zenodo.7584227>.
 
 The analysis also used bulk BCR repertoires from tonsilar B cells from [King et al. Science Immunology 2021](https://doi.org/10.1126/sciimmunol.abe6291). The data is downloaded from [ArrayExpress entry E-MTAB-8999](https://www.ebi.ac.uk/biostudies/arrayexpress/studies/E-MTAB-8999).
 
