@@ -1,0 +1,144 @@
+---
+title: "Gene usage analysis"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+
+---
+
+Analysis of Gene usage on Silvia's Melanoma data in comparison with the Healthy/Ebola/Covid repertoire data of ours.
+
+```{r setup}
+knitr::opts_chunk$set(fig.path = "gene_usage_plots/", dev = "svg")
+library(ggplot2)
+library(plyr)
+```
+
+```{r}
+all_seqs <- readRDS("HV_EB_COV_MEL_comb_Oct22.RDS")
+
+```
+
+```{r}
+# This function gets the % of repertoire 
+getPercentagesFromCountTbList <- function(tb_list, category_name = "Vgene")
+{
+  lapply(tb_list, function(tb){
+    variables <- colnames(tb)[-ncol(tb)]
+    variables <- variables[variables != category_name]
+    if(length(variables) == 0){
+      tb$all <- sum(tb$V1)
+      tb$perc <- tb$V1 / tb$all
+      tb <- tb[, c(category_name, "perc")]
+    } else if(length(variables) > 0){
+      sums <- ddply(tb, variables, summarise, all = sum(V1), .drop = FALSE)
+      colnames(sums) <- c(variables, "all")
+      tb <- merge(tb, sums, by = variables, sort = FALSE)
+      tb$perc <- tb$V1 / tb$all
+      tb <- tb[, c(category_name, variables, "perc")]
+    }
+    tb
+  })
+}
+
+```
+
+```{r}
+# King et al Bulk BCR-seq Tonsil dataset
+tonsil_repseq <- list.files(path = "/Users/josefng/Downloads", 
+                            full.names = TRUE, 
+                            pattern = "REPseq")
+tonsil_repseq <- lapply(tonsil_repseq, read.table, sep = "\t", 
+                        header= TRUE, stringsAsFactors = FALSE)
+tonsil_repseq <- do.call("rbind", tonsil_repseq)
+# unique sequences
+tonsil_repseq <- tonsil_repseq[which(!duplicated(tonsil_repseq$SEQUENCE_VDJ)), ]
+```
+
+```{r}
+genes <- list(
+  all_seqs,
+  tonsil_repseq[, c("CLONE_ID", "ISOTYPE", "V_CALL", "DONOR", "SEQUENCE_ID")]
+)
+genes[[1]] <- genes[[1]][which(genes[[1]]$SampleType %in% c("Healthy", "melanoma")), ]
+genes[[1]]$SampleType <- factor(genes[[1]]$SampleType, levels = c("Healthy", "melanoma"), labels = c("HV", "MP"))
+genes[[1]]$type <- genes[[1]]$PatientID
+genes[[1]]$type <- replace(genes[[1]]$type, which(genes[[1]]$SampleType == "HV"), "HV")
+genes[[1]] <- genes[[1]][grepl("IGH", genes[[1]]$Vgene), ]
+genes[[2]]$type <- "Tonsils"
+genes[[2]]$Vgene <- sapply(genes[[2]]$V_CALL, function(x){
+  unlist(strsplit(x, split = "*", fixed = TRUE))[1]
+})
+genes[[2]] <- genes[[2]][grepl("IGH", genes[[2]]$Vgene), ]
+genes[[2]]$UseAsRef <- (!duplicated(genes[[2]]$CLONE_ID))
+
+genes[[1]] <- genes[[1]][, c("Seq_ID", "Subclass", "Vgene", "UseAsRef", "type")]
+genes[[2]] <- genes[[2]][, c("SEQUENCE_ID", "ISOTYPE", "Vgene", "UseAsRef", "type")]
+colnames(genes[[2]]) <- colnames(genes[[1]])
+genes <- do.call("rbind", genes)
+genes <- genes[which(genes$Subclass %in% c("IgM", "IgG1",
+                                           "IgG2", "IgG3",
+                                           "IgG4", "IgA1",
+                                           "IgA2", "IgE")), ]
+```
+
+```{r}
+genes$Vgene <- factor(genes$Vgene)
+
+v_usage <- list(
+  "all" = ddply(genes, c("Subclass", "Vgene", "type"), nrow, .drop = FALSE),
+  "UseAsRef" = ddply(genes[which(genes$UseAsRef), ], 
+                     c("Subclass", "Vgene", "type"), nrow, .drop = FALSE)
+)
+v_usage <- getPercentagesFromCountTbList( v_usage, category_name = "Vgene" )
+
+# V genes which are most frequently used in each isotype & each patient (union of top 10 genes)
+top10genes <- split(v_usage[[1]], f = list(v_usage[[1]]$type, v_usage[[1]]$Subclass))
+top10genes <- lapply(top10genes, function(tb){
+  if(!grepl("^M", tb[1, "type"])) return(NULL)
+  tb <- tb[order(tb$perc, decreasing = TRUE), ]
+  as.character(tb[1:5, "Vgene"])
+})
+top10genes <- unique(unlist(top10genes))
+
+# combine the tables
+colnames(v_usage[[1]])[4] <- "perc_all"
+colnames(v_usage[[2]])[4] <- "perc_UseAsRef"
+v_usage <- merge(v_usage[[1]], v_usage[[2]])
+
+
+# Select only the labels you want
+#v_usage1 <- v_usage[v_usage$Subclass %in% c("IgM", "IgG1", "IgG2", "IgA1"), ]
+
+# this below controls the order these plots are shown
+#v_usage1$Subclass <- factor(v_usage1$Subclass, 
+#                            levels = c("IgM", "IgG1", "IgG2", "IgA1"))
+
+# you can filter certain v genes you want if necessary, e.g.:
+v_usage1 <- v_usage[ !grepl("^IGK|^IGL", v_usage$Vgene), ]
+v_usage1 <- v_usage1[which(v_usage1$Vgene %in% top10genes), ]
+# v_usage1 <- na.omit(v_usage1)
+v_usage1$diff <- v_usage1$perc_all - v_usage1$perc_UseAsRef
+
+write.csv(v_usage1, 'gene_usage_stats.csv')
+```
+
+```{r, fig.width=14, fig.height=6}
+v_usage1$autoimmune <- (v_usage1$Vgene %in% c("IGHV1-69", "IGHV4-34", "IGHV4-39", "IGHV6-1"))
+v_usage1$autoimmune <- factor(v_usage1$autoimmune,
+                              levels = c("TRUE", "FALSE"),
+                              labels = c("autoimmune", "other genes"))
+ggplot(v_usage1, aes(x = type, y = Vgene, fill = perc_all)) +
+  geom_tile() + 
+  scale_fill_gradient2(labels = scales::percent, name = "% sequences", na.value = "white") + 
+  cowplot::theme_cowplot() +
+  facet_grid(autoimmune ~ Subclass, scales = "free_y", space = "free_y") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 8))
+```
+
+```{r}
+sessionInfo()
+```

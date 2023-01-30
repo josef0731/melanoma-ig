@@ -1,0 +1,574 @@
+---
+title: "CDR3 kidera analysis"
+output:
+  pdf_document: default
+  html_notebook: default
+  html_document:
+    df_print: paged
+---
+
+Analysis of CDR3 kidera characteristics on Silvia's Melanoma data in comparison with the Healthy/Ebola/Covid repertoire data of ours.
+
+```{r setup}
+knitr::opts_chunk$set(fig.path = "cdr3_analysis_plots/", dev = "png", dpi = 300)
+library(ggplot2)
+library(plyr)
+```
+
+
+```{r eval=FALSE}
+all_seqs <- readRDS('HV_EB_COV_MEL_comb_CDR_FR_lengths_AA_separated.RDS')
+
+mel <- read.table('Visium_Oct22_slices/results/Visium_all_Aug22_comboDatBoth.txt', sep = '\t', stringsAsFactors = FALSE,
+                  header = TRUE)
+v_gapped <- c("Visium_Oct22_slices/results/VQuest/2_IMGT-gapped-nt-sequences_visa.txt",
+              "Visium_Oct22_slices/results/VQuest/2_IMGT-gapped-nt-sequences_visb.txt")
+v_gapped <- lapply(v_gapped, read.table, sep = '\t',
+                   stringsAsFactors = FALSE, comment.char = "",
+                   header = TRUE, quote = "", fill = TRUE)
+v_gapped[[1]] <- v_gapped[[1]][, c("Sequence.ID", "V.REGION")]
+v_gapped[[2]] <- v_gapped[[2]][, c("Sequence.ID", "V.REGION")]
+v_gapped <- do.call("rbind", v_gapped)
+mel <- merge(mel, v_gapped, by.x = "Seq_ID", by.y = "Sequence.ID",
+             all.x = TRUE, all.y = FALSE, sort = FALSE)
+colnames(mel)[which(colnames(mel) == "V.REGION")] <- "V_gapped"
+mel_unique = mel[row.names(unique(mel[,c("Subclass", "V_gapped")])),]
+colnames(mel_unique)[which(colnames(mel_unique) == "Patient")] <- "PatientID"
+mel_unique$SampleType <- "melanoma"
+
+megafile <- read.table('AntibodyRepertoireCV+RSV+EBOV+YFV.txt', sep = '\t',
+                       stringsAsFactors = FALSE, header = TRUE )
+megafile <- merge(megafile, all_seqs[, c("Seq_ID", "V_gapped")],
+                  by = "Seq_ID", all.x = TRUE, all.y = FALSE)
+megafile$BRC_code <- NA
+megafile <- megafile[which(megafile$Seq_ID %in% all_seqs$Seq_ID), colnames(mel_unique)]
+
+all_seqs <- rbind(megafile, mel_unique)
+saveRDS(all_seqs, 'HV_EB_COV_MEL_comb_Oct22.RDS')
+
+```
+
+```{r}
+all_seqs <- readRDS("HV_EB_COV_MEL_comb_Oct22.RDS")
+```
+
+# kidera analysis
+
+```{r}
+kidera <- all_seqs[, c("Seq_ID", "SampleType", "PatientID", "Subclass", "AA_CDR3_edited", 
+               "Boman", "pI_EMBOSS", "Hydrophobicity", 
+               colnames(all_seqs)[which(grepl("^kidera", colnames(all_seqs)))])]
+```
+
+```{r, dev = "png", dpi=300}
+# PCA
+kidera <- kidera[which(!is.na(kidera$kidera1.helix.bend.pref)), ]
+kidera$SampleType <- replace(kidera$SampleType, which(kidera$SampleType == "melanoma"),
+                             "Melanoma")
+kidera$SampleType <- factor(kidera$SampleType, 
+                            levels = c("Healthy", "Melanoma", "EB", "COVID"),
+                            labels = c("HV", "MP", "EB", "Covid"))
+kidera <- kidera[which(kidera$Subclass %in% c("IgM", "IgG1", "IgG2", "IgG3", "IgG4", "IgA1", "IgA2", "IgE")), ]
+pca <- prcomp( kidera[, colnames(kidera)[which(grepl("^kidera", colnames(kidera)))]])
+kidera <- cbind(kidera, pca$x[, 1:2])
+ggplot(kidera, aes(x = PC1, y = PC2, colour = SampleType)) + geom_point() + 
+  facet_wrap(~ Subclass) + cowplot::theme_cowplot() +
+  scale_colour_manual(values = c("HV" = "#d6d6d6", "MP" = "#ff9300", 
+                                 "EB" = "#fffb00", "Covid" = "#00f900"), name = "")
+```
+
+Too imbalanced the sequence numbers, and all seem to just overlay one another.
+
+Try plot only median for each group and show range as error bars.
+
+```{r}
+# modify from ggbiplot::ggbiplot but only get the calculated arrows positions
+# representing the PCA loadings
+getArrows <- function (pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE, 
+          obs.scale = 1 - scale, var.scale = scale, groups = NULL, 
+          ellipse = FALSE, ellipse.prob = 0.68, labels = NULL, labels.size = 3, 
+          alpha = 1, var.axes = TRUE, circle = FALSE, circle.prob = 0.69, 
+          varname.size = 3, varname.adjust = 1.5, varname.abbrev = FALSE) 
+{
+  library(ggplot2)
+  library(plyr)
+  library(scales)
+  library(grid)
+  stopifnot(length(choices) == 2)
+  if (inherits(pcobj, "prcomp")) {
+    nobs.factor <- sqrt(nrow(pcobj$x) - 1)
+    d <- pcobj$sdev
+    u <- sweep(pcobj$x, 2, 1/(d * nobs.factor), FUN = "*")
+    v <- pcobj$rotation
+  }
+  else if (inherits(pcobj, "princomp")) {
+    nobs.factor <- sqrt(pcobj$n.obs)
+    d <- pcobj$sdev
+    u <- sweep(pcobj$scores, 2, 1/(d * nobs.factor), FUN = "*")
+    v <- pcobj$loadings
+  }
+  else if (inherits(pcobj, "PCA")) {
+    nobs.factor <- sqrt(nrow(pcobj$call$X))
+    d <- unlist(sqrt(pcobj$eig)[1])
+    u <- sweep(pcobj$ind$coord, 2, 1/(d * nobs.factor), FUN = "*")
+    v <- sweep(pcobj$var$coord, 2, sqrt(pcobj$eig[1:ncol(pcobj$var$coord), 
+                                                  1]), FUN = "/")
+  }
+  else if (inherits(pcobj, "lda")) {
+    nobs.factor <- sqrt(pcobj$N)
+    d <- pcobj$svd
+    u <- predict(pcobj)$x/nobs.factor
+    v <- pcobj$scaling
+    d.total <- sum(d^2)
+  }
+  else {
+    stop("Expected a object of class prcomp, princomp, PCA, or lda")
+  }
+  choices <- pmin(choices, ncol(u))
+  df.u <- as.data.frame(sweep(u[, choices], 2, d[choices]^obs.scale, 
+                              FUN = "*"))
+  v <- sweep(v, 2, d^var.scale, FUN = "*")
+  df.v <- as.data.frame(v[, choices])
+  names(df.u) <- c("xvar", "yvar")
+  names(df.v) <- names(df.u)
+  if (pc.biplot) {
+    df.u <- df.u * nobs.factor
+  }
+  r <- sqrt(qchisq(circle.prob, df = 2)) * prod(colMeans(df.u^2))^(1/4)
+  v.scale <- rowSums(v^2)
+  df.v <- r * df.v/sqrt(max(v.scale))
+  if (obs.scale == 0) {
+    u.axis.labs <- paste("standardized PC", choices, sep = "")
+  }
+  else {
+    u.axis.labs <- paste("PC", choices, sep = "")
+  }
+  u.axis.labs <- paste(u.axis.labs, sprintf("(%0.1f%% explained var.)", 
+                                            100 * pcobj$sdev[choices]^2/sum(pcobj$sdev^2)))
+  if (!is.null(labels)) {
+    df.u$labels <- labels
+  }
+  if (!is.null(groups)) {
+    df.u$groups <- groups
+  }
+  if (varname.abbrev) {
+    df.v$varname <- abbreviate(rownames(v))
+  }
+  else {
+    df.v$varname <- rownames(v)
+  }
+  df.v$angle <- with(df.v, (180/pi) * atan(yvar/xvar))
+  df.v$hjust = with(df.v, (1 - varname.adjust * sign(xvar))/2)
+  df.v
+}
+
+```
+
+```{r, fig.width=9, fig.height=9}
+kidera2 <- list(
+  ddply(kidera[which(kidera$SampleType != "MP"), ],
+        c("SampleType", "Subclass"), summarise,
+                 PC1_median = median(PC1),
+                 PC1_lowerq = quantile(PC1, 0.025),
+                 PC1_upperq = quantile(PC1, 0.975),
+                 PC2_median = median(PC2),
+                 PC2_lowerq = quantile(PC2, 0.025),
+                 PC2_upperq = quantile(PC2, 0.975)),
+  ddply(kidera[which(kidera$SampleType == "MP"), ], 
+        c("SampleType", "PatientID", "Subclass"), summarise,
+                 PC1_median = median(PC1),
+                 PC1_lowerq = quantile(PC1, 0.025),
+                 PC1_upperq = quantile(PC1, 0.975),
+                 PC2_median = median(PC2),
+                 PC2_lowerq = quantile(PC2, 0.025),
+                 PC2_upperq = quantile(PC2, 0.975))
+)
+kidera2[[1]]$PatientID <- NA
+kidera2[[1]] <- kidera2[[1]][, colnames(kidera2[[2]])]
+kidera2 <- do.call("rbind", kidera2)
+
+arrows <- getArrows( pca )
+arrows$varname <- gsub("\\..*", "", arrows$varname)
+arrows$varname <- gsub("kidera", "K", arrows$varname)
+
+# Plot
+ggplot(kidera2, aes(x = PC1_median, y = PC2_median, colour = SampleType)) +
+    scale_colour_manual(values = c("HV" = "#d6d6d6", "MP" = "#ff9300", 
+                                   "EB" = "#fffb00", "Covid" = "#00f900"), name = "") +
+    geom_point() + geom_errorbar(aes(xmin = PC1_lowerq, xmax = PC1_upperq, alpha = (SampleType == "MP"))) +
+    geom_errorbar(aes(ymin = PC2_lowerq, ymax = PC2_upperq, alpha = (SampleType == "MP"))) +
+    ggrepel::geom_text_repel(aes(label = PatientID)) + xlab("PC1") + ylab("PC2") + 
+  scale_alpha_manual(values = c("FALSE" = 1, "TRUE" = 0.3), guide = "none") +
+    cowplot::theme_cowplot() + facet_wrap(~ Subclass)
+```
+
+```{r, fig.width=9, fig.height=3.5}
+kidera2$Subclass <- factor(kidera2$Subclass,
+                           levels = c("IgM", "IgG1", "IgG2", "IgG3", "IgG4", "IgA1", 
+                                      "IgA2", "IgE"))
+
+cowplot::plot_grid(
+  ggplot(kidera2[which(kidera2$Subclass %in% c("IgA1", "IgG1", "IgG2", "IgG3", "IgM")), ], 
+       aes(x = PC1_median, y = PC2_median, colour = SampleType)) +
+    scale_colour_manual(values = c("HV" = "#d6d6d6", "MP" = "#ff9300", 
+                                   "EB" = "#fffb00", "Covid" = "#00f900"), name = "") +
+    geom_point() + geom_errorbar(aes(xmin = PC1_lowerq, xmax = PC1_upperq, alpha = (SampleType == "MP"))) +
+    geom_errorbar(aes(ymin = PC2_lowerq, ymax = PC2_upperq, alpha = (SampleType == "MP"))) +
+    ggrepel::geom_text_repel(aes(label = PatientID)) + xlab("PC1") + ylab("PC2") + 
+  scale_alpha_manual(values = c("FALSE" = 1, "TRUE" = 0.3), guide = "none") +
+    cowplot::theme_cowplot() + facet_wrap(~ Subclass),
+  
+  cowplot::plot_grid(
+    NULL,
+    ggplot(arrows) + geom_segment(aes(x = -0.5, y = 0.5, 
+                                xend = xvar - 0.5, yend = yvar + 0.5),
+             arrow = arrow(length = unit(0.5, "picas")), color = "grey70") +
+    ggrepel::geom_text_repel(aes(x = xvar - 0.5, y = yvar + 0.5, label = varname), 
+              color = "grey70", size = 3) + cowplot::theme_cowplot() + xlab("PC1") + ylab("PC2"),
+    nrow = 2, ncol = 1
+  ),
+  
+  ncol = 2, rel_widths = c(3, 1)
+
+)
+
+```
+
+all patients represented individually
+
+```{r, fig.width=10, fig.height=5.5}
+# all patients represented individually
+kidera4 <- ddply(kidera, 
+        c("SampleType", "PatientID", "Subclass"), summarise,
+                 PC1_median = median(PC1),
+                 PC1_lowerq = quantile(PC1, 0.025),
+                 PC1_upperq = quantile(PC1, 0.975),
+                 PC2_median = median(PC2),
+                 PC2_lowerq = quantile(PC2, 0.025),
+                 PC2_upperq = quantile(PC2, 0.975))
+
+ggplot(kidera4, 
+       aes(x = PC1_median, y = PC2_median, colour = SampleType)) +
+    scale_colour_manual(values = c("HV" = "#d6d6d6", "MP" = "#ff9300", 
+                                   "EB" = "#fffb00", "Covid" = "#00f900"), name = "") +
+    geom_point() + geom_errorbar(aes(xmin = PC1_lowerq, xmax = PC1_upperq), alpha = 0.3) +
+    geom_errorbar(aes(ymin = PC2_lowerq, ymax = PC2_upperq), alpha = 0.3) +
+    xlab("PC1") + ylab("PC2") + 
+    cowplot::theme_cowplot() + facet_grid(SampleType ~ Subclass)
+
+```
+
+```{r, fig.width=8, fig.height=3}
+kidera3 <- reshape2::melt(kidera, id.vars = c("SampleType", "PatientID", "Subclass"),
+                          measure.vars = colnames(kidera)[which(grepl("kidera", colnames(kidera)))]) 
+kidera3$Subclass <- factor(kidera3$Subclass,
+                           levels = c("IgM", "IgG1", "IgG2", "IgG3", "IgG4", "IgA1", 
+                                      "IgA2", "IgE"))
+kidera3$variable <- factor(kidera3$variable, levels = levels(kidera3$variable),
+                           labels = c("K1 (helix/bend)", "K2 (side-chain size)",
+                                      "K3 (extended structure)", "K4 (hydrophobicity)",
+                                      "K5 (double-bend)", "K6 (partial specific volume)",
+                                      "K7 (flat extended)", "K8 (alpha region)",
+                                      "K9 (pK-C)", "K10 (surrounding hydrophobicity)"))
+
+kidera3$type <- kidera3$PatientID
+kidera3$type <- replace(kidera3$type, 
+                        which(kidera3$SampleType == "HV"),
+                        "HV")
+
+test2 <- ddply(kidera3[kidera3$SampleType %in% c("MP", "HV"), ],
+        c("SampleType", "type", "Subclass", "variable"),
+        summarise,
+        median = median(value))
+
+test <- ggpubr::compare_means(
+  value ~ type, 
+  data = kidera3[which(kidera3$SampleType %in% c("HV", "MP")), ], 
+  group.by = c("variable", "Subclass")
+)
+
+test$effsize <- apply(test, MARGIN =1, function(x){
+  effsize::cliff.delta(
+    kidera3[kidera3$variable == x[1] & kidera3$Subclass == x[2] &
+               kidera3$type == x[4], "value"], 
+    kidera3[kidera3$variable == x[1] & kidera3$Subclass == x[2] &
+               kidera3$type == x[5], "value"])$estimate
+})
+
+test$group1_median <- apply(test, MARGIN =1, function(x){
+  test2[test2$type == x[4] & test2$Subclass == x[2] &
+          test2$variable == x[1], "median"]
+})
+test$group2_median <- apply(test, MARGIN =1, function(x){
+  test2[test2$type == x[5] & test2$Subclass == x[2] &
+          test2$variable == x[1], "median"]
+})
+test$diff <- test$group2_median - test$group1_median
+```
+
+```{r, fig.width=9, fig.height=9}
+test$variable <- factor(test$variable, levels = levels(test$variable),
+                           labels = c("K1\n(helix/bend)", "K2\n(side-chain\nsize)",
+                                      "K3\n(extended\nstructure)", "K4\n(hydrophobicity)",
+                                      "K5\n(double-bend)", "K6 (partial\nspecific volume)",
+                                      "K7 (flat\nextended)", "K8 (alpha\nregion)",
+                                      "K9 (pK-C)", "K10\n(surrounding\nhydrophobicity)"))
+
+test <- test[which(test$Subclass %in% c("IgM", "IgG1", "IgG2",
+                                        "IgG3", "IgA1")), ]
+test$p.adj <- p.adjust(test$p)
+test$signif <- -log10(test$p.adj)
+test$signif <- ifelse(test$signif >= 5e-10, -log10(5e-10), test$signif)
+test$signif <- (test$p.adj < 0.05)
+
+ggplot(test[test$group1 == "HV", ], 
+       aes(x = group2, y = Subclass, 
+           color = diff, size = signif)) +
+  geom_point() + cowplot::theme_cowplot() +
+  facet_wrap(~ variable) +
+  scale_color_gradient2(low = "blue", high = "red",
+                        name = "difference in\nCDR3 kidera\nvalue vs HV") + xlab("") + ylab("") +
+  scale_size_manual(values = c("TRUE" = 6, "FALSE" = 1), 
+                    name = "adjusted p<0.05") +
+#  scale_size_continuous(name = "adjusted\np-value",
+#                        breaks = c(-log10(1), -log10(0.5),
+#                                   -log10(0.05), -log(0.005)), 
+#                        labels = c("1", "0.5", "0.05", "0.005")) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+only selected Kidera factors
+
+```{r, fig.width=7, fig.height=3}
+ggplot(test[test$group1 == "HV" &
+              grepl("K1\n|K3|K8", test$variable), ], 
+       aes(x = group2, y = Subclass, 
+           color = diff, size = signif)) +
+  geom_point() + cowplot::theme_cowplot() +
+  facet_wrap(~ variable) +
+  scale_color_gradient2(low = "blue", high = "red",
+                        name = "difference in\nCDR3 kidera\nvalue vs HV") + xlab("") + ylab("") +
+  scale_size_manual(values = c("TRUE" = 6, "FALSE" = 1), 
+                    name = "adjusted p<0.05") +
+#  scale_size_continuous(name = "adjusted\np-value",
+#                        breaks = c(-log10(1), -log10(0.5),
+#                                   -log10(0.05), -log(0.005)), 
+#                        labels = c("1", "0.5", "0.05", "0.005")) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r}
+write.csv(test, 'cdr3_kidera_stats.csv', row.names = FALSE)
+```
+
+# Amino acid usage & secondary structures
+
+```{r}
+# Average flexibility index from Bhaskaran & Ponnuswamy
+# avialable in ProtScale in ExPASy
+# https://web.expasy.org/protscale/pscale/Averageflexibility.html
+
+flexibility_scale <- c("A" = 0.360, "R" = 0.530, "N" = 0.460, "D" = 0.510, 
+                       "C" = 0.350, "Q" = 0.490, "E" = 0.500, "G" = 0.540,  
+                       "H" = 0.320, "I" = 0.460, "L" = 0.370, "K" = 0.470,  
+                       "M" = 0.300, "F" = 0.310, "P" = 0.510, "S" = 0.510,  
+                       "T" = 0.440, "W" = 0.310, "Y" = 0.420, "V" = 0.390)  
+
+all_seqs$flexibility <- apply(all_seqs[, c("Num_AAs", Biostrings::AA_STANDARD)], MARGIN = 1, function(x){
+  sum(x[2:21] * flexibility_scale) / x[1]
+})
+```
+
+```{r, fig.width=8, fig.height=4}
+aacount <- all_seqs[, c("Seq_ID", "PatientID", "SampleType", "UseAsRef",
+                        "Subclass", "Num_AAs", "flexibility",
+                        Biostrings::AA_STANDARD)]
+aacount[, c(Biostrings::AA_STANDARD)] <- aacount[, c(Biostrings::AA_STANDARD)] / aacount$Num_AAs
+
+# count % residues forming helix/strand/coil
+aacount$helix <- apply(aacount[, c("E", "A", "L", "M", "Q", "K", "R", "H")], MARGIN = 1,
+                       sum)
+aacount$strand <- apply(aacount[, c("V", "I", "Y", "C", "W", "F", "T")], MARGIN = 1,
+                        sum)
+aacount$coil <- apply(aacount[, c("G", "N", "P", "S", "D")], MARGIN = 1,
+                      sum)
+aacount <- aacount[which(aacount$SampleType %in% c("Healthy", "melanoma")), ]
+aacount$SampleType <- factor(aacount$SampleType, levels = c("Healthy", "melanoma"), labels = c("HV", "MP"))
+aacount$type <- aacount$PatientID
+aacount$type <- replace(aacount$type, which(aacount$SampleType == "HV"), "HV")
+
+aacount2 <- reshape2::melt(aacount, id.vars = c("Seq_ID", "UseAsRef", "type", "Subclass"), 
+                           measure.vars = Biostrings::AA_STANDARD)
+aacount3 <- reshape2::melt(aacount, id.vars = c("Seq_ID", "UseAsRef", "type", "Subclass"), 
+                           measure.vars = c("helix", "strand", "coil", "flexibility"))
+
+ggplot(ddply(aacount2[which(aacount2$Subclass %in% c("IgM", "IgG1", "IgG2", "IgG3", "IgA1")), ], 
+             c("type", "Subclass", "variable"), 
+             summarise, median = median(value, na.rm = TRUE)), 
+       aes(y = type, x = variable, fill = median)) + geom_tile() +
+  scale_fill_gradient2(na.value = "white", name = "CDR3 AA\nusage\n(median %)", 
+                       labels = scales::percent) + 
+  cowplot::theme_cowplot() + facet_wrap(~ Subclass) + xlab("Amino acids") + ylab("")
+```
+
+```{r, fig.width=7, fig.height=3}
+test <- ggpubr::compare_means(value ~ type, 
+                              data = aacount3[aacount3$Subclass %in% c("IgM", "IgA1", "IgG1", "IgG2", "IgG3"), ], group.by = c("variable", "Subclass"))
+test$effsize <- apply(test, MARGIN =1, function(x){
+  effsize::cliff.delta(
+    aacount3[aacount3$variable == x[1] & aacount3$Subclass == x[2] &
+               aacount3$type == x[4], "value"], 
+    aacount3[aacount3$variable == x[1] & aacount3$Subclass == x[2] &
+               aacount3$type == x[5], "value"])$estimate
+})
+
+aacount4 <- ddply(aacount3[which(aacount3$Subclass %in% c("IgM", "IgG1", "IgG2", "IgG3", "IgA1")), ], 
+             c("type", "Subclass", "variable"), 
+             summarise, median = median(value, na.rm = TRUE))
+
+test$group1_median <- apply(test, MARGIN = 1, function(x){
+  aacount4[which(aacount4$type == x[4] & 
+                   aacount4$variable == x[1] &
+                   aacount4$Subclass == x[2]), "median"]
+})
+
+test$group2_median <- apply(test, MARGIN = 1, function(x){
+  aacount4[which(aacount4$type == x[5] & 
+                   aacount4$variable == x[1] &
+                   aacount4$Subclass == x[2]), "median"]
+})
+
+test$diff <- test$group2_median - test$group1_median
+test$p.adj <- p.adjust(test$p)
+test$signif <- -log10(test$p.adj)
+test$signif <- ifelse(test$signif >= 5e-10, -log10(5e-10), test$signif)
+test$signif <- (test$p.adj < 0.05)
+test <- test[which(test$group1 == "HV"), ]
+
+ggplot(test[which(test$variable != "flexibility"), ], 
+       aes(x = group2, y = Subclass, 
+           color = diff, size = signif)) +
+  geom_point() + cowplot::theme_cowplot() +
+  facet_wrap(~ variable) +
+  scale_color_gradient2(low = "blue", high = "red",
+                        name = "difference in\n% CDR residue\nusage vs HV", labels = scales::percent) + 
+  xlab("") + ylab("") +
+  scale_size_manual(values = c("TRUE" = 6, "FALSE" = 1), 
+                    name = "adjusted p<0.05") +
+#  scale_size_continuous(name = "adjusted\np-value",
+#                        breaks = c(-log10(1), -log10(0.5),
+#                                   -log10(0.05), -log(0.005)), 
+#                        labels = c("1", "0.5", "0.05", "0.005")) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+
+```{r, fig.width=3.5, fig.height=3}
+ggplot(test[which(test$variable == "flexibility"), ], 
+       aes(x = group2, y = Subclass, 
+           color = diff, size = signif)) +
+  geom_point() + cowplot::theme_cowplot() +
+  facet_wrap(~ variable) +
+  scale_color_gradient2(low = "blue", high = "red") + 
+  xlab("") + ylab("") +
+  scale_size_manual(values = c("TRUE" = 6, "FALSE" = 1), 
+                    name = "adjusted p<0.05") +
+#  scale_size_continuous(name = "adjusted\np-value",
+#                        breaks = c(-log10(1), -log10(0.5),
+#                                   -log10(0.05), -log(0.005)), 
+#                        labels = c("1", "0.5", "0.05", "0.005")) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+```{r}
+write.csv(test, 'cdr3_SS_stats.csv', row.names = FALSE)
+```
+
+# collapse one sequence per clone
+
+```{r}
+test <- ggpubr::compare_means(value ~ type, 
+                              data = aacount3[which(aacount3$Subclass %in% c("IgM", "IgA1", "IgG1", "IgG2", "IgG3") & aacount3$UseAsRef), ], group.by = c("variable", "Subclass"))
+test$effsize <- apply(test, MARGIN =1, function(x){
+  y1 <- aacount3[which(aacount3$variable == x[1] & aacount3$Subclass == x[2] &
+               aacount3$type == x[4] & aacount3$UseAsRef), "value"]
+  y2 <- aacount3[which(aacount3$variable == x[1] & aacount3$Subclass == x[2] &
+               aacount3$type == x[5] & aacount3$UseAsRef), "value"]
+  if( length(y1) > 3 & length(y2) > 3 ){
+    return(effsize::cliff.delta(y1, y2)$estimate)
+  } else return(NA)
+})
+
+aacount4 <- ddply(aacount3[which(aacount3$Subclass %in% c("IgM", "IgG1", "IgG2", "IgG3", "IgA1") & aacount3$UseAsRef), ], 
+             c("type", "Subclass", "variable"), 
+             summarise, median = median(value, na.rm = TRUE))
+
+test$group1_median <- apply(test, MARGIN = 1, function(x){
+  aacount4[which(aacount4$type == x[4] & 
+                   aacount4$variable == x[1] &
+                   aacount4$Subclass == x[2]), "median"]
+})
+
+test$group2_median <- apply(test, MARGIN = 1, function(x){
+  aacount4[which(aacount4$type == x[5] & 
+                   aacount4$variable == x[1] &
+                   aacount4$Subclass == x[2]), "median"]
+})
+
+#test$diff <- test$group2_median - test$group1_median
+test$diff <- apply(test[, c("group1_median", "group2_median")], MARGIN = 1, function(x){
+  o <- try(x[2] - x[1], silent = TRUE)
+  if( class(o) != "try-error") return(o) else return(NA)
+})
+test$p.adj <- p.adjust(test$p)
+test$signif <- -log10(test$p.adj)
+test$signif <- ifelse(test$signif >= 5e-10, -log10(5e-10), test$signif)
+test$signif <- (test$p.adj < 0.05)
+test <- test[which(test$group1 == "HV"), ]
+```
+
+```{r}
+saveRDS(test, 'cdr3_SS_stats_UseAsRefTrue.rds')
+```
+
+```{r, fig.width=7, fig.height=3}
+ggplot(test[which(test$variable != "flexibility"), ], 
+       aes(x = group2, y = Subclass, 
+           color = diff, size = signif)) +
+  geom_point() + cowplot::theme_cowplot() +
+  facet_wrap(~ variable) +
+  scale_color_gradient2(low = "blue", high = "red",
+                        name = "difference in\n% CDR residue\nusage vs HV", labels = scales::percent) + 
+  xlab("") + ylab("") +
+  scale_size_manual(values = c("TRUE" = 6, "FALSE" = 1), 
+                    name = "adjusted p<0.05") +
+#  scale_size_continuous(name = "adjusted\np-value",
+#                        breaks = c(-log10(1), -log10(0.5),
+#                                   -log10(0.05), -log(0.005)), 
+#                        labels = c("1", "0.5", "0.05", "0.005")) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r, fig.width=3.5, fig.height=3}
+ggplot(test[which(test$variable == "flexibility"), ], 
+       aes(x = group2, y = Subclass, 
+           color = diff, size = signif)) +
+  geom_point() + cowplot::theme_cowplot() +
+  facet_wrap(~ variable) +
+  scale_color_gradient2(low = "blue", high = "red") + 
+  xlab("") + ylab("") +
+  scale_size_manual(values = c("TRUE" = 6, "FALSE" = 1), 
+                    name = "adjusted p<0.05") +
+#  scale_size_continuous(name = "adjusted\np-value",
+#                        breaks = c(-log10(1), -log10(0.5),
+#                                   -log10(0.05), -log(0.005)), 
+#                        labels = c("1", "0.5", "0.05", "0.005")) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+```{r}
+sessionInfo()
+```
