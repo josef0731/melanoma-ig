@@ -1,0 +1,58 @@
+---
+title: "GSE123139_cell_subsetting_treatment_naive_vs_post_treatment_after_DF"
+output: html_notebook
+---
+# Introduction  
+# Setup  
+## Libraries  
+```{r}
+library("dplyr")
+library("ggplot2")
+library("Seurat")
+library("patchwork")
+```
+## Data  
+### GEX  
+```{r}
+GEX = readRDS("./path_to_directory/GSE123139_raw.RDS")
+GEX[1:5,1:5]
+```
+### Metadata  
+```{r}
+annotation_treatment_naive = read.csv("./path_to_directory/metadata_table_mel_treatment_naive_only_immune_cells_after_DF_no_cycling_cells_new_annotation.csv", row.names = 1)
+annotation_post_treatment = read.csv("./path_to_directory/metadata_table_mel_post_treatment_only_immune_cells_after_DF_no_cycling_cells_new_annotation.csv", row.names = 1)
+```
+```{r}
+colnames(annotation_treatment_naive)
+colnames(annotation_post_treatment)
+```
+# Pre-processing  
+Adding treatment type to metadata  
+```{r}
+annotation_treatment_naive$treatment_type = "naive_treatment"
+annotation_post_treatment$treatment_type = "post_treatment"
+```
+Selecting relevant columns  
+```{r}
+columns_of_interest = c("orig.ident", "cell_id", "location", "stage", "treatment", "patient_id", "mc_group", "mc_group_granular", "annotation", "treatment_type")
+columns_of_interest %in% colnames(annotation_treatment_naive)
+columns_of_interest %in% colnames(annotation_post_treatment)
+```
+Combining metadata  
+```{r}
+metadata_combined = rbind(annotation_treatment_naive[,columns_of_interest], annotation_post_treatment[,columns_of_interest])
+```
+Splitting metadata into cell coarse types and subsetting GEX  
+```{r}
+table(metadata_combined$annotation, metadata_combined$treatment_type)
+```
+
+B cells
+```{r}
+metadata_B_cells = metadata_combined %>% filter(annotation == "B cells")
+write.csv(metadata_B_cells, "./path_to_directory/metadata_B_cells.csv")
+```
+```{r}
+GEX_B_cells = GEX[,rownames(metadata_B_cells)]
+saveRDS(GEX_B_cells, "./path_to_directory/GEX_B_cells.RDS")
+```

@@ -1,0 +1,184 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+# Introduction  
+A script to remove doublets from the treatment naive subset of GSE123139.  
+
+# Setup  
+## Libraries  
+```{r}
+library("dplyr")
+library("ggplot2")
+library("Seurat")
+library("patchwork")
+library("DoubletFinder")
+```
+## Data  
+Data was preprocessed in a separate script and does not include tumour clusters.  
+```{r}
+GEX = readRDS("./path_to_directory/GSE123139_GEX_treatment_naive.RDS")
+cells_metadata = readRDS("./path_to_directory/GSE123139_cells_metadata_treatment_naive.RDS")
+```
+# Analysis  
+
+```{r}
+mel_all = CreateSeuratObject(counts = GEX, meta.data = cells_metadata, project = "mel_t_naive", min.cells = 3, min.features = 200)
+mel_all
+```
+Cleaning memory  
+```{r}
+rm(GEX)
+rm(cells_metadata)
+gc()
+```
+Checking for MT genes
+```{r}
+mel_all[["percent.mt"]] <- PercentageFeatureSet(mel_all, pattern = "^MT-")
+```
+
+```{r}
+VlnPlot(mel_all, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```
+```{r}
+mel_all <- subset(mel_all, subset = nFeature_RNA > 200 & nFeature_RNA < 2500)
+mel_all
+```
+
+```{r}
+mel_all <- NormalizeData(mel_all, normalization.method = "LogNormalize", scale.factor = 10000)
+mel_all <- FindVariableFeatures(mel_all, selection.method = "vst", nfeatures = 2000)
+```
+```{r}
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(mel_all), 10)
+
+# plot variable features with and without labels
+plot1 = VariableFeaturePlot(mel_all)
+LabelPoints(plot = plot1, points = top10, repel = TRUE)
+```
+```{r}
+all.genes <- rownames(mel_all)
+mel_all <- ScaleData(mel_all, features = all.genes)
+```
+
+## PCA  
+```{r}
+mel_all <- RunPCA(mel_all, features = VariableFeatures(object = mel_all))
+```
+```{r}
+DimPlot(mel_all, reduction = "pca")
+```
+```{r}
+DimPlot(mel_all, reduction = "pca", group.by = "mc_group")
+DimPlot(mel_all, reduction = "pca", group.by = "mc_group_granular")
+```
+```{r}
+ElbowPlot(mel_all, ndims = 50)
+```
+
+```{r}
+mel_all <- FindNeighbors(mel_all, dims = 1:20)
+mel_all <- FindClusters(mel_all, resolution = 0.8)
+```
+## UMAP  
+```{r}
+mel_all <- RunUMAP(mel_all, dims = 1:20)
+```
+# Analysis post UMAP  
+
+```{r}
+DimPlot(mel_all, reduction = "umap", group.by = "seurat_clusters", cols = "alphabet")
+DimPlot(mel_all, reduction = "umap", group.by = "mc_group", cols = "alphabet")
+DimPlot(mel_all, reduction = "umap", group.by = "mc_group_granular", cols = "alphabet")
+DimPlot(mel_all, reduction = "umap", group.by = "patient_id", cols = "alphabet")
+DimPlot(mel_all, reduction = "umap", group.by = "location", cols = "alphabet")
+```
+```{r}
+FeaturePlot(mel_all, reduction = "umap", features = "nCount_RNA", order = T)
+FeaturePlot(mel_all, reduction = "umap", features = "nFeature_RNA", order = T)
+```
+## Removal of cycling cluster  
+Cycling genes from Seurat    
+```{r}
+s.genes <- cc.genes$s.genes
+DotPlot(mel_all, features = s.genes) + coord_flip()
+```
+Cluster 9 is cycling cells and it is removed  
+```{r}
+mel_all = mel_all[, mel_all$seurat_clusters !=9]
+mel_all
+DimPlot(mel_all, reduction = "umap", group.by = "mc_group", cols = "alphabet")
+```
+# Re-running the pre-processing with new cell composition  
+```{r}
+mel_all <- FindVariableFeatures(mel_all, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(mel_all)
+mel_all <- ScaleData(mel_all, features = all.genes)
+mel_all <- RunPCA(mel_all, features = VariableFeatures(object = mel_all))
+ElbowPlot(mel_all, ndims = 50)
+```
+```{r}
+mel_all <- FindNeighbors(mel_all, dims = 1:20)
+mel_all <- FindClusters(mel_all, resolution = 0.8)
+mel_all <- RunUMAP(mel_all, dims = 1:20)
+```
+```{r}
+DimPlot(mel_all, reduction = "umap", group.by = "seurat_clusters", cols = "alphabet")
+DimPlot(mel_all, reduction = "umap", group.by = "mc_group", cols = "alphabet")
+DimPlot(mel_all, reduction = "umap", group.by = "mc_group_granular", cols = "alphabet")
+DimPlot(mel_all, reduction = "umap", group.by = "patient_id", cols = "alphabet")
+DimPlot(mel_all, reduction = "umap", group.by = "location", cols = "alphabet")
+```
+# Doublet finder  
+Source https://github.com/chris-mcginnis-ucsf/DoubletFinder 
+```{r}
+Sys.time()
+sweep.res.list_mel <- paramSweep_v3(mel_all, PCs = 1:20, sct = FALSE)
+Sys.time()
+```
+
+```{r}
+Sys.time()
+sweep.stats_mel <- summarizeSweep(sweep.res.list_mel, GT = FALSE)
+Sys.time()
+```
+```{r}
+bcmvn_mel <- find.pK(sweep.stats_mel)
+```
+```{r}
+plot(bcmvn_mel$pK, bcmvn_mel$BCmetric)
+```
+```{r}
+bcmvn_mel
+```
+
+```{r}
+annotations <- mel_all@meta.data$mc_group
+homotypic.prop <- modelHomotypic(annotations)
+nExp_poi <- round(0.075*nrow(mel_all@meta.data))
+nExp_poi.adj <- round(nExp_poi*(1-homotypic.prop))
+```
+```{r}
+Sys.time()
+mel_DF <- doubletFinder_v3(mel_all, PCs = 1:20, pN = 0.25, pK = 0.005, nExp = nExp_poi, reuse.pANN = FALSE, sct = FALSE)
+Sys.time()
+```
+```{r}
+table(mel_DF$DF.classifications_0.25_0.005_1327)
+```
+```{r}
+DimPlot(mel_DF, reduction = "umap", group.by = "DF.classifications_0.25_0.005_1327")
+FeaturePlot(mel_DF, features = "pANN_0.25_0.005_1327", order = TRUE)
+```
+```{r}
+table(mel_DF$DF.classifications_0.25_0.005_1327,
+      mel_DF$mc_group)
+```
+```{r}
+VlnPlot(mel_DF, features = "nFeature_RNA", group.by = "DF.classifications_0.25_0.005_1327")
+```
+```{r}
+mel_all_post_treatment_DF = data.frame(mel_DF@meta.data)
+head(mel_all_post_treatment_DF)
+```

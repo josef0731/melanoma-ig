@@ -1,0 +1,185 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+# Introduction  
+A script analyse B cells from treatment naive samples from GSE123139 after removal of cycling cells and doublets.  
+
+# Setup  
+## Libraries  
+```{r}
+library("dplyr")
+library("ggplot2")
+library("Seurat")
+library("patchwork")
+```
+## Data  
+Data was preprocessed in a separate script and contains only B cell clusters.  
+```{r}
+metadata_B_cells = read.csv("./path_to_directory/metadata_B_cells.csv", row.names = 1)
+head(metadata_B_cells)
+```
+
+```{r}
+GEX_B_cells = readRDS("./path_to_directory/GEX_B_cells.RDS")
+GEX_B_cells[1:5,1:5]
+```
+
+```{r}
+table(metadata_B_cells$treatment_type)
+metadata_B_cells = metadata_B_cells %>% filter(treatment_type == "naive_treatment")
+GEX_B_cells = GEX_B_cells[,rownames(metadata_B_cells)]
+```
+
+# Analysis  
+```{r}
+mel_all = CreateSeuratObject(counts = GEX_B_cells, meta.data = metadata_B_cells, project = "mel_B_cells", min.cells = 3, min.features = 200)
+mel_all
+```
+## QC  
+```{r}
+VlnPlot(mel_all, features = c("nFeature_RNA", "nCount_RNA"))
+```
+The data was pre-filtered for doublets, so no need to remove anything else.
+
+```{r}
+mel_all <- NormalizeData(mel_all, normalization.method = "LogNormalize", scale.factor = 10000)
+mel_all <- FindVariableFeatures(mel_all, selection.method = "vst", nfeatures = 500)
+```
+```{r}
+top10 <- head(VariableFeatures(mel_all), 10)
+
+plot1 = VariableFeaturePlot(mel_all)
+LabelPoints(plot = plot1, points = top10, repel = TRUE)
+```
+```{r}
+all.genes <- rownames(mel_all)
+mel_all <- ScaleData(mel_all, features = all.genes)
+```
+
+## PCA  
+
+```{r}
+mel_all <- RunPCA(mel_all, features = VariableFeatures(object = mel_all))
+```
+```{r}
+DimPlot(mel_all, reduction = "pca")
+```
+```{r}
+DimPlot(mel_all, reduction = "pca", group.by = "mc_group")
+```
+```{r}
+ElbowPlot(mel_all, ndims = 50)
+```
+
+```{r}
+mel_all <- FindNeighbors(mel_all, dims = 1:10)
+mel_all <- FindClusters(mel_all, resolution = 0.8)
+```
+## UMAP  
+```{r}
+mel_all <- RunUMAP(mel_all, dims = 1:10)
+```
+
+# Analysis post UMAP  
+
+```{r}
+DimPlot(mel_all, reduction = "umap", group.by = "seurat_clusters", cols = "alphabet")
+DimPlot(mel_all, reduction = "umap", group.by = "mc_group", cols = "alphabet")
+DimPlot(mel_all, reduction = "umap", group.by = "mc_group_granular", cols = "alphabet")
+DimPlot(mel_all, reduction = "umap", group.by = "patient_id", cols = "alphabet")
+```
+
+```{r}
+mel_all <- RunTSNE(mel_all, dims = 1:10, verbose = FALSE)
+DimPlot(mel_all, reduction = "tsne", group.by = "seurat_clusters", cols = "alphabet")
+```
+
+```{r}
+FeaturePlot(mel_all, reduction = "umap", features = "nCount_RNA", order = T)
+FeaturePlot(mel_all, reduction = "umap", features = "nFeature_RNA", order = T)
+```
+Re-annotatitng clusters at coarse level for downstream analysis  
+```{r}
+DotPlot(mel_all, features = c("PTPRC", "CD247", 
+                          "CD4", "CD8A", 
+                          "NCAM1", "KLRD1", 
+                          "CD19", "MS4A1", "CD79A", "CD79B", "CD27", 
+                          "CD38", "SDC1", "TNFRSF17",
+                          "CR2", "CR1", "FCER2",
+                          "LAMP3", "CD83", "ITGAX", 
+                          "CD68", "CD163", "ITGAM",
+                          "CD14",
+                         "FCGR3A"),
+        cluster.idents = T,
+        dot.scale = 10) + 
+  theme_classic() + coord_flip() + ggtitle("Treatment naive")
+
+DotPlot(mel_all, features = c("PTPRC", # CD45
+                         "CD2", "CD3D", "CD3E", "CD3G", "CD8A", "CD8B", # T cells
+                         "FCGR3A", "NCAM1", "KLRD1", "KIR2DL3", # NK cells
+                         "BLNK", "CD19", "MS4A1", "CD79A", "CD79B", "CD27",# B cells
+                         "CD38", "SDC1", # plasma cells
+                         "CD14", "CD68", "CD163", "CSF1R"), # mono/macrophages
+        cluster.idents = T,
+        dot.scale = 10) + 
+  theme_classic() + coord_flip() + ggtitle("Treatment naive")
+```
+
+```{r}
+IGH = c("IGHD", "IGHM", "IGHA1", "IGHA2", "IGHG1", "IGHG2", "IGHG3", "IGHG4")
+```
+```{r}
+p1 = VlnPlot(mel_all, features = IGH, ncol=2)
+p2 = FeaturePlot(mel_all, features = IGH, ncol=2, order = TRUE)
+
+wrap_plots(p1, p2, ncol = 2)
+```
+```{r}
+p1 = VlnPlot(mel_all, features = IGH, ncol=2)
+p2 = FeaturePlot(mel_all, features = IGH, ncol=2, order = TRUE)
+
+wrap_plots(p1, p2, ncol = 2)
+```
+
+
+```{r}
+DotPlot(mel_all, features = c("IGHM", "IGHD", "IL4R", "TCL1A", "TXNIP", "FCER2", "FCMR", "SELL", "BANK1", "KLF2",
+                              "CD27", "VIM",
+                              "CD69", "DUSP1", "JUN", "DNAJB1", "FOS", "HSPA1A",# activated
+                              "GPR183", "CD44",
+                              "HOPX", "ISG20", "EZR",
+                              "IGHG1",  "IGHG2", "IGHG3", "IGHG4", "IGHA1", "IGHA2",
+                              "CXCR5",
+                          "CD38", "SDC1"
+                              ),
+        cluster.idents = T,
+        dot.scale = 8) + 
+  theme_classic() + coord_flip()
+DotPlot(mel_all, features = c("IGHM", "IGHD", "IL4R", "TCL1A", "TXNIP", "FCER2", "FCMR", "SELL", "BANK1", "KLF2",
+                              "CD27", "VIM",
+                              "CD69", "DUSP1", "JUN", "DNAJB1", "FOS", "HSPA1A",# activated
+                              "GPR183", "CD44",
+                              "HOPX", "ISG20", "EZR",
+                              "IGHG1",  "IGHG2", "IGHG3", "IGHG4", "IGHA1", "IGHA2",
+                              "CXCR5",
+                          "CD38", "SDC1"
+                              ),
+        cluster.idents = T,
+        dot.scale = 8,
+        group.by = "cell_type") + 
+  theme_classic() + coord_flip()
+```
+
+```{r}
+mel_all.markers <- FindAllMarkers(mel_all, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+mel_all.markers %>%
+    group_by(cluster) %>%
+    slice_max(n = 2, order_by = avg_log2FC)
+```
+```{r}
+mel_all.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> top10
+DoHeatmap(mel_all, features = top10$gene) + NoLegend()
+```
